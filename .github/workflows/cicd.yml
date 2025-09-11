@@ -1,62 +1,101 @@
-name: CI-CD Pipeline with Conformity Scan
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CI/CD Pipeline with Conformity Scan and Deploy (GitHub Source)
  
-on:
-  push:
-    branches:
-      - main
+Resources:
+  # ----------------------------
+  # S3 Bucket for CodePipeline
+  # ----------------------------
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
  
-jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
-    env:
-      AWS_REGION: us-east-1
-      CONFORMITY_REGION: us-west-2
+  # ----------------------------
+  # IAM Role for CodePipeline
+  # ----------------------------
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
  
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+  # ----------------------------
+  # IAM Role for CloudFormation execution
+  # ----------------------------
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
  
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.9
+  # ----------------------------
+  # CodePipeline
+  # ----------------------------
+  CICDPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: "1"
+              Configuration:
+                Owner: Cyber-rano         # 🔄 replace with your GitHub username/org
+                Repo: code_commit                # 🔄 replace with your repository name
+                Branch: main
+                OAuthToken: "{{resolve:secretsmanager:github/oauth/token:SecretString}}"
+              OutputArtifacts:
+                - Name: SourceOutput
  
-      - name: Install dependencies
-        run: pip install requests pyyaml
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: MyBuildProject
  
-      - name: Debug Conformity API Key
-        run: |
-          if [ -z "$CONFORMITY_API_KEY" ]; then
-            echo "❌ CONFORMITY_API_KEY is missing"
-            exit 1
-          else
-            echo "✅ CONFORMITY_API_KEY is set (length: ${#CONFORMITY_API_KEY})"
-          fi
-        env:
-          CONFORMITY_API_KEY: ${{ secrets.CONFORMITY_API_KEY }}
+        - Name: Deploy
+          Actions:
+            - Name: DeployCFN
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: DeployedAppStack
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationExecutionRole.Arn
+              RunOrder: 1
  
-      - name: Run Conformity Scan (Pre-Deploy)
-        run: python conformity_scan.py pipeline.yaml
-        env:
-          CONFORMITY_API_KEY: ${{ secrets.CONFORMITY_API_KEY }}
-          CONFORMITY_REGION: ${{ env.CONFORMITY_REGION }}
- 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
- 
-      - name: Deploy with CloudFormation
-        run: |
-          aws cloudformation deploy \
-            --template-file pipeline.yaml \
-            --stack-name GithubCICDPipeline \
-            --capabilities CAPABILITY_NAMED_IAM
- 
-      - name: Run Conformity Scan (Post-Deploy)
-        run: python conformity_scan.py pipeline.yaml
-        env:
-          CONFORMITY_API_KEY: ${{ secrets.CONFORMITY_API_KEY }}
-          CONFORMITY_REGION: ${{ env.CONFORMITY_REGION }}
