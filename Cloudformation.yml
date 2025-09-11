@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
-Description: CI/CD Pipeline with GitHub, CodeBuild, and Cloud One Conformity Scanner
-
+Description: CI/CD Pipeline with GitHub + CloudFormation Deploy
+ 
 Parameters:
 
   GitHubOwner:
@@ -10,27 +10,19 @@ Parameters:
 
     Default: Cyber-rano
 
-    Description: GitHub username or organization
-
   GitHubRepo:
 
     Type: String
 
     Default: code_commit
 
-    Description: GitHub repository name
-
   GitHubBranch:
 
     Type: String
 
     Default: main
-
-    Description: GitHub branch to use
-
+ 
 Resources:
-
-  # S3 Bucket for Pipeline Artifacts
 
   ArtifactBucket:
 
@@ -43,9 +35,7 @@ Resources:
       VersioningConfiguration:
 
         Status: Enabled
-
-  # CodePipeline IAM Role
-
+ 
   CodePipelineServiceRole:
 
     Type: AWS::IAM::Role
@@ -70,122 +60,10 @@ Resources:
 
         - arn:aws:iam::aws:policy/AWSCodePipeline_FullAccess
 
-        - arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess
-
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
 
-        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
-
-  # CodeBuild IAM Role
-
-  CodeBuildServiceRole:
-
-    Type: AWS::IAM::Role
-
-    Properties:
-
-      AssumeRolePolicyDocument:
-
-        Version: "2012-10-17"
-
-        Statement:
-
-          - Effect: Allow
-
-            Principal:
-
-              Service: codebuild.amazonaws.com
-
-            Action: sts:AssumeRole
-
-      ManagedPolicyArns:
-
-        - arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess
-
-        - arn:aws:iam::aws:policy/AmazonS3FullAccess
-
-        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
-
-  # CodeBuild Project - Build Stage
-
-  CodeBuildProject:
-
-    Type: AWS::CodeBuild::Project
-
-    Properties:
-
-      Name: CloudFormation-Build
-
-      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
-
-      Artifacts:
-
-        Type: CODEPIPELINE
-
-      Environment:
-
-        ComputeType: BUILD_GENERAL1_SMALL
-
-        Image: aws/codebuild/standard:5.0
-
-        Type: LINUX_CONTAINER
-
-        EnvironmentVariables:
-
-          - Name: CONFORMITY_API_KEY
-
-            Value: '{{resolve:secretsmanager:cloudone/conformity/api:SecretString}}'
-
-            Type: SECRETS_MANAGER
-
-      Source:
-
-        Type: CODEPIPELINE
-
-      TimeoutInMinutes: 10
-
-  # CodeBuild Project - Conformity Scan Stage
-
-  ConformityScanProject:
-
-    Type: AWS::CodeBuild::Project
-
-    Properties:
-
-      Name: Conformity-Scan
-
-      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
-
-      Artifacts:
-
-        Type: CODEPIPELINE
-
-      Environment:
-
-        ComputeType: BUILD_GENERAL1_SMALL
-
-        Image: aws/codebuild/standard:5.0
-
-        Type: LINUX_CONTAINER
-
-        EnvironmentVariables:
-
-          - Name: CONFORMITY_API_KEY
-
-            Value: '{{resolve:secretsmanager:cloudone/conformity/api:SecretString}}'
-
-            Type: SECRETS_MANAGER
-
-      Source:
-
-        Type: CODEPIPELINE
-
-        BuildSpec: buildspec.yml
-
-      TimeoutInMinutes: 10
-
-  # CodePipeline Definition
-
+        - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
+ 
   Pipeline:
 
     Type: AWS::CodePipeline::Pipeline
@@ -233,67 +111,7 @@ Resources:
                 OAuthToken: '{{resolve:secretsmanager:github/oauth/token:SecretString:GitHubToken}}'
 
               RunOrder: 1
-
-        - Name: Build
-
-          Actions:
-
-            - Name: BuildCFN
-
-              ActionTypeId:
-
-                Category: Build
-
-                Owner: AWS
-
-                Provider: CodeBuild
-
-                Version: "1"
-
-              InputArtifacts:
-
-                - Name: SourceOutput
-
-              OutputArtifacts:
-
-                - Name: BuildOutput
-
-              Configuration:
-
-                ProjectName: !Ref CodeBuildProject
-
-              RunOrder: 1
-
-        - Name: ConformityScan
-
-          Actions:
-
-            - Name: RunConformityScan
-
-              ActionTypeId:
-
-                Category: Build
-
-                Owner: AWS
-
-                Provider: CodeBuild
-
-                Version: "1"
-
-              InputArtifacts:
-
-                - Name: BuildOutput
-
-              OutputArtifacts:
-
-                - Name: ScanOutput
-
-              Configuration:
-
-                ProjectName: !Ref ConformityScanProject
-
-              RunOrder: 1
-
+ 
         - Name: Deploy
 
           Actions:
@@ -312,7 +130,7 @@ Resources:
 
               InputArtifacts:
 
-                - Name: BuildOutput
+                - Name: SourceOutput
 
               Configuration:
 
