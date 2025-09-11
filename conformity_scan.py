@@ -1,49 +1,76 @@
 import os
 import sys
-import requests
 import json
+import requests
+import yaml
  
-API_KEY = os.getenv("CONFORMITY_API_KEY")
-TEMPLATE_FILE = sys.argv[1] if len(sys.argv) > 1 else "template.yaml"
+# Load environment variables
+api_key = os.getenv("CONFORMITY_API_KEY")
+region = os.getenv("CONFORMITY_REGION", "us-west-2")
  
-with open(TEMPLATE_FILE, "r") as f:
-    template_body = f.read()
- 
-# Correct US endpoint for Trend Micro Conformity
-url = "https://us-west-2-api.cloudconformity.com/v1/template-scanner/scan"
-print(f"🔎 Using Conformity API endpoint: {url}")
- 
-headers = {
-    "Content-Type": "application/json",
-    "Authorization": f"ApiKey {API_KEY}"
-}
- 
-payload = {
-    "type": "cloudformation-template",
-    "contents": template_body
-}
- 
-response = requests.post(url, headers=headers, data=json.dumps(payload))
- 
-if response.status_code == 200:
-    results = response.json()
-    with open("conformity_results.json", "w") as out:
-        json.dump(results, out, indent=2)
-    print("✅ Scan completed. Results saved to conformity_results.json")
- 
-    # Fail pipeline if critical/high issues exist
-    issues = results.get("issues", [])
-    critical_or_high = [i for i in issues if i["riskLevel"].lower() in ["very-high", "high"]]
- 
-    if critical_or_high:
-        print("❌ Critical/High issues found:")
-        for issue in critical_or_high:
-            print(f"- {issue['rule']['title']} (Risk: {issue['riskLevel']})")
-        sys.exit(1)
-    else:
-        print("🎉 No critical/high issues found.")
-else:
-    print("❌ Scan failed:", response.status_code, response.text)
+if not api_key:
+    print("❌ Missing CONFORMITY_API_KEY in environment")
     sys.exit(1)
  
+# API endpoint
+url = f"https://{region}-api.cloudconformity.com/v1/template-scanner/scan"
+headers = {
+    "Content-Type": "application/json",
+    "Authorization": f"ApiKey {api_key}"
+}
  
+# Get template path from CLI
+if len(sys.argv) < 2:
+    print("❌ Usage: python conformity_scan.py <template.yaml>")
+    sys.exit(1)
+ 
+template_file = sys.argv[1]
+ 
+try:
+    with open(template_file, "r") as f:
+        template_contents = f.read()
+except Exception as e:
+    print(f"❌ Failed to read template: {e}")
+    sys.exit(1)
+ 
+# Build payload
+payload = {
+    "data": {
+        "type": "template-scan",
+        "attributes": {
+            "type": "cloudformation-template",
+            "contents": template_contents
+        }
+    }
+}
+ 
+# Send request
+print(f"🔎 Using Conformity API endpoint: {url}")
+response = requests.post(url, headers=headers, data=json.dumps(payload))
+ 
+if response.status_code != 200:
+    print(f"❌ Scan failed: {response.status_code} {response.text}")
+    sys.exit(1)
+ 
+result = response.json()
+print("✅ Scan completed successfully")
+ 
+# Normalize result to always be a list
+data = result.get("data", [])
+if isinstance(data, dict):
+    data = [data]  # wrap single object into a list
+ 
+violations_found = False
+for item in data:
+    attrs = item.get("attributes", {})
+    violations = attrs.get("violations", [])
+    if violations:
+        violations_found = True
+        print("❌ Violations detected:")
+        for v in violations:
+            print(f"- {v}")
+ 
+if violations_found:
+    sys.exit(1)
+else:
+    print("✅ No violations found")
